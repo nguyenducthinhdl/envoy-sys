@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Envoy xDS Control Plane</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --border: #2d3a4f;
+      --text: #e6edf3;
+      --muted: #8b9cb3;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --tree: #8b5cf6;
+      --tree-hover: #7c3aed;
+      --ok: #22c55e;
+      --err: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header h1 { margin: 0 0 0.25rem; font-size: 1.25rem; font-weight: 600; }
+    header p { margin: 0; color: var(--muted); font-size: 0.875rem; }
+    main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+    .section { margin-bottom: 1rem; }
+    .section-title {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.5rem;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 0.6rem 1.1rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      transition: background 0.15s;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary { background: var(--panel); border: 1px solid var(--border); color: var(--text); }
+    button.secondary:hover:not(:disabled) { background: #243044; }
+    button.tree { background: var(--tree); }
+    button.tree:hover:not(:disabled) { background: var(--tree-hover); }
+    .status {
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+      min-height: 2.5rem;
+    }
+    .status.ok { border-color: var(--ok); color: var(--ok); }
+    .status.err { border-color: var(--err); color: #fca5a5; }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    pre {
+      margin: 0;
+      padding: 1rem;
+      border-radius: 8px;
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 0.75rem;
+      line-height: 1.45;
+      overflow: auto;
+      max-height: 70vh;
+      white-space: pre;
+      word-break: normal;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Envoy xDS Control Plane</h1>
+    <p>Push snapshots to sidecar <code>sidecar-1</code>, inspect config dump, and view parsed tree</p>
+  </header>
+  <main>
+    <div class="section">
+      <div class="section-title">Push configuration</div>
+      <div class="toolbar">
+        <button type="button" id="btn-config1">Config 1: push</button>
+        <button type="button" id="btn-config2">Config 2: push</button>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Configuration tree (envoyviz)</div>
+      <div class="toolbar">
+        <button type="button" id="btn-tree1" class="tree">Config 1: tree</button>
+        <button type="button" id="btn-tree2" class="tree">Config 2: tree</button>
+        <button type="button" id="btn-tree-current" class="tree secondary">Current: tree</button>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Raw admin dump</div>
+      <div class="toolbar">
+        <button type="button" id="btn-dump" class="secondary">Show Envoy config dump</button>
+      </div>
+    </div>
+    <div id="status" class="status">Ready.</div>
+    <label for="output">Output</label>
+    <pre id="output">Use Config 1/2 tree to push that snapshot and render the parsed listener/cluster tree.</pre>
+  </main>
+  <script>
+    const statusEl = document.getElementById("status");
+    const outputEl = document.getElementById("output");
+    const buttons = document.querySelectorAll("button");
+
+    function setBusy(busy) {
+      buttons.forEach(function (b) { b.disabled = busy; });
+    }
+
+    function setStatus(message, kind) {
+      statusEl.textContent = message;
+      statusEl.className = "status" + (kind ? " " + kind : "");
+    }
+
+    async function pushConfig(id) {
+      setBusy(true);
+      setStatus("Pushing config-" + id + "…", "");
+      try {
+        const res = await fetch("/api/config/" + id, { method: "POST" });
+        const body = await res.text();
+        if (!res.ok) throw new Error(body || res.statusText);
+        setStatus("Pushed config-" + id + " successfully.", "ok");
+        outputEl.textContent = body;
+      } catch (err) {
+        setStatus("Failed to push config-" + id + ": " + err.message, "err");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadTree(id) {
+      setBusy(true);
+      const label = id ? "config-" + id : "current";
+      setStatus("Loading " + label + " tree (push + parse)…", "");
+      try {
+        const url = id ? "/api/config/" + id + "/tree" : "/api/envoy/config-tree";
+        const res = await fetch(url, { method: id ? "POST" : "GET" });
+        const body = await res.text();
+        if (!res.ok) throw new Error(body || res.statusText);
+        outputEl.textContent = body;
+        setStatus(label + " tree loaded.", "ok");
+      } catch (err) {
+        setStatus("Failed to load tree: " + err.message, "err");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadDump() {
+      setBusy(true);
+      setStatus("Fetching Envoy config dump from sidecar…", "");
+      try {
+        const res = await fetch("/api/envoy/config-dump");
+        const body = await res.text();
+        if (!res.ok) throw new Error(body || res.statusText);
+        try {
+          outputEl.textContent = JSON.stringify(JSON.parse(body), null, 2);
+        } catch (_) {
+          outputEl.textContent = body;
+        }
+        setStatus("Config dump loaded.", "ok");
+      } catch (err) {
+        setStatus("Failed to load config dump: " + err.message, "err");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    document.getElementById("btn-config1").addEventListener("click", function () { pushConfig(1); });
+    document.getElementById("btn-config2").addEventListener("click", function () { pushConfig(2); });
+    document.getElementById("btn-tree1").addEventListener("click", function () { loadTree(1); });
+    document.getElementById("btn-tree2").addEventListener("click", function () { loadTree(2); });
+    document.getElementById("btn-tree-current").addEventListener("click", function () { loadTree(null); });
+    document.getElementById("btn-dump").addEventListener("click", loadDump);
+  </script>
+</body>
+</html>

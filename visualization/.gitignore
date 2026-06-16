@@ -1,0 +1,4 @@
+/envoyviz
+/bin/
+*.test
+coverage.out

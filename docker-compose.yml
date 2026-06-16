@@ -1,0 +1,60 @@
+services:
+  controlplane:
+    build:
+      context: .
+      dockerfile: controlplane/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "18000:18000"
+      - "8080:8080"
+      - "8022:8022"
+    networks:
+      - demo
+    environment:
+      - ENVOY_ADMIN_URL=http://app-sidecar:9901
+      - ENVOY_ADMIN_FALLBACK_URL=http://host.docker.internal:9901
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  app-sidecar:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+      - "9901:9901"
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    networks:
+      - demo
+    environment:
+      - BACKEND_ADDR=127.0.0.1:8080
+      - XDS_HOST=controlplane
+      - XDS_PORT=18000
+
+  traffic-client:
+    build: ./client
+    restart: unless-stopped
+    depends_on:
+      - app-sidecar
+    networks:
+      - demo
+    ports:
+      - "8089:8089"
+    environment:
+      - LOCUST_HOST=http://app-sidecar:8081
+      - REQUESTS_PER_SEC=20
+    entrypoint: ["locust", "-f", "/app/locustfile.py"]
+    command:
+      - --host=http://app-sidecar:8081
+      - --web-host=0.0.0.0
+      - --web-port=8089
+
+networks:
+  demo:
+    driver: bridge
